@@ -73,7 +73,18 @@ const messageSchema = t.Union([
   t.Object({ type: t.Literal('merge'), patch: t.Record(t.String(), t.Any()) }),
   t.Object({ type: t.Literal('replace'), data: t.Record(t.String(), t.Any()) }),
   t.Object({ type: t.Literal('sync') }),
+  t.Object({ type: t.Literal('hello'), userId: t.String(), name: t.String() }),
+  t.Object({
+    type: t.Literal('presence'),
+    userId: t.String(),
+    name: t.String(),
+    x: t.Number(),
+    y: t.Number(),
+  }),
 ]);
+
+type ClientInfo = { userId: string; name: string };
+const clients = new Map<string, ClientInfo>();
 
 const app = new Elysia()
   .use(cors())
@@ -86,9 +97,38 @@ const app = new Elysia()
       ws.send({ type: 'snapshot', version: state.version, data: state.data });
     },
     close(ws) {
+      const info = clients.get(ws.id);
+      if (info) {
+        clients.delete(ws.id);
+        ws.publish(ROOM, { type: 'leave', userId: info.userId });
+      }
       ws.unsubscribe(ROOM);
     },
     message(ws, msg) {
+      if (msg.type === 'hello') {
+        clients.set(ws.id, { userId: msg.userId, name: msg.name });
+        // Tell the newcomer about everyone else
+        for (const [wsId, info] of clients) {
+          if (wsId !== ws.id) {
+            ws.send({ type: 'join', userId: info.userId, name: info.name });
+          }
+        }
+        // Tell everyone else about the newcomer
+        ws.publish(ROOM, { type: 'join', userId: msg.userId, name: msg.name });
+        return;
+      }
+
+      if (msg.type === 'presence') {
+        ws.publish(ROOM, {
+          type: 'presence',
+          userId: msg.userId,
+          name: msg.name,
+          x: msg.x,
+          y: msg.y,
+        });
+        return;
+      }
+
       switch (msg.type) {
         case 'set':
           setByPath(state.data, msg.path, msg.value as JsonValue);
